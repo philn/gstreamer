@@ -2147,6 +2147,43 @@ gst_video_aggregator_do_qos (GstVideoAggregator * vagg, GstClockTime timestamp)
     return -1;
   }
 
+  /* qos is done on running time */
+  qostime =
+      gst_segment_to_running_time (&GST_AGGREGATOR_PAD (agg->srcpad)->segment,
+      GST_FORMAT_TIME, timestamp);
+
+  if (vagg->priv->live) {
+    GstClock *clock;
+    GstClockTime base_time, latency;
+
+    clock = gst_element_get_clock (GST_ELEMENT_CAST (vagg));
+    base_time = gst_element_get_base_time (GST_ELEMENT_CAST (vagg));
+    latency = gst_aggregator_get_latency (GST_AGGREGATOR_CAST (vagg));
+
+    if (clock && latency != GST_CLOCK_TIME_NONE) {
+      GstClockTime now;
+
+      now = gst_clock_get_time (clock) - base_time;
+
+      /* see how our next timestamp relates to the current time */
+      GST_LOG_OBJECT (vagg, "qostime %" GST_TIME_FORMAT ", now %"
+          GST_TIME_FORMAT " latency %" GST_TIME_FORMAT, GST_TIME_ARGS (qostime),
+          GST_TIME_ARGS (now), GST_TIME_ARGS (latency));
+
+      /* Allow to be up to one frame late */
+      qostime += latency + gst_util_uint64_scale_int_round (GST_SECOND,
+          GST_VIDEO_INFO_FPS_D (&vagg->info),
+          GST_VIDEO_INFO_FPS_N (&vagg->info));
+
+      if (now > qostime) {
+        GST_DEBUG_OBJECT (vagg, "we are late, drop frame");
+        gst_clear_object (&clock);
+        return now - qostime;
+      }
+    }
+    gst_clear_object (&clock);
+  }
+
   /* get latest QoS observation values */
   gst_video_aggregator_read_qos (vagg, &proportion, &earliest_time);
 
@@ -2155,11 +2192,6 @@ gst_video_aggregator_do_qos (GstVideoAggregator * vagg, GstClockTime timestamp)
     GST_LOG_OBJECT (vagg, "no observation yet, process frame");
     return -1;
   }
-
-  /* qos is done on running time */
-  qostime =
-      gst_segment_to_running_time (&GST_AGGREGATOR_PAD (agg->srcpad)->segment,
-      GST_FORMAT_TIME, timestamp);
 
   /* see how our next timestamp relates to the latest qos timestamp */
   GST_LOG_OBJECT (vagg, "qostime %" GST_TIME_FORMAT ", earliest %"
