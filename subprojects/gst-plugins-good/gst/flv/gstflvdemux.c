@@ -102,6 +102,9 @@ GST_ELEMENT_REGISTER_DEFINE_WITH_CODE (flvdemux, "flvdemux",
 /* how much stream time to wait for audio tags to appear after we have video, or vice versa */
 #define NO_MORE_PADS_THRESHOLD (6 * GST_SECOND)
 
+/* minimum pts output to account for negative composition time offset (cts) */
+#define MIN_PTS (GST_SECOND * G_GUINT64_CONSTANT(3600) * G_GUINT64_CONSTANT(1000))
+
 static gboolean flv_demux_handle_seek_push (GstFlvDemux * demux,
     GstEvent * event);
 static gboolean gst_flv_demux_handle_seek_pull (GstFlvDemux * demux,
@@ -1294,13 +1297,15 @@ gst_flv_demux_parse_tag_audio (GstFlvDemux * demux, GstBuffer * buffer)
       7 + codec_data, demux->tag_data_size - codec_data);
 
   /* detect (and deem to be resyncs)  large pts gaps */
-  if (gst_flv_demux_update_resync (demux, pts, demux->audio_need_discont,
-          &demux->last_audio_pts, &demux->audio_time_offset)) {
+  if (gst_flv_demux_update_resync (demux, pts + MIN_PTS / GST_MSECOND,
+          demux->audio_need_discont, &demux->last_audio_pts,
+          &demux->audio_time_offset)) {
     GST_BUFFER_FLAG_SET (outbuf, GST_BUFFER_FLAG_RESYNC);
   }
 
   /* Fill buffer with data */
-  GST_BUFFER_PTS (outbuf) = pts * GST_MSECOND + demux->audio_time_offset;
+  GST_BUFFER_PTS (outbuf) =
+      pts * GST_MSECOND + demux->audio_time_offset + MIN_PTS;
   GST_BUFFER_DTS (outbuf) = GST_BUFFER_PTS (outbuf);
   GST_BUFFER_DURATION (outbuf) = GST_CLOCK_TIME_NONE;
   GST_BUFFER_OFFSET (outbuf) = demux->audio_offset++;
@@ -1531,8 +1536,9 @@ static GstFlowReturn
 gst_flv_demux_parse_tag_video (GstFlvDemux * demux, GstBuffer * buffer)
 {
   GstFlowReturn ret = GST_FLOW_OK;
-  guint32 dts = 0, codec_data = 1, dts_ext = 0;
+  guint32 codec_data = 1, dts_ext = 0;
   gint32 cts = 0;
+  gint64 dts = 0, pts;
   gboolean keyframe = FALSE;
   guint8 flags = 0, codec_tag = 0;
   GstBuffer *outbuf;
@@ -1572,8 +1578,8 @@ gst_flv_demux_parse_tag_video (GstFlvDemux * demux, GstBuffer * buffer)
   /* Combine them */
   dts |= dts_ext << 24;
 
-  GST_LOG_OBJECT (demux, "dts bytes %02X %02X %02X %02X (%d)", data[0], data[1],
-      data[2], data[3], dts);
+  GST_LOG_OBJECT (demux, "dts bytes %02X %02X %02X %02X (%" G_GINT64_FORMAT
+      ")", data[0], data[1], data[2], data[3], dts);
 
   /* Skip the stream id and go directly to the flags */
   flags = GST_READ_UINT8 (data + 7);
@@ -1594,11 +1600,11 @@ gst_flv_demux_parse_tag_video (GstFlvDemux * demux, GstBuffer * buffer)
 
     if (cts < 0 && ABS (cts) > dts) {
       GST_ERROR_OBJECT (demux, "Detected a negative composition time offset "
-          "'%d' that would lead to negative PTS, fixing", cts);
-      cts += ABS (cts) - dts;
+          "'%d' that would lead to PTS < DTS, fixing", cts);
+      dts += cts;
+      cts = 0;
     }
-
-    GST_LOG_OBJECT (demux, "got cts %d", cts);
+    GST_LOG_OBJECT (demux, "got cts %d dts %" G_GINT64_FORMAT, cts, dts);
   }
 
   GST_LOG_OBJECT (demux, "video tag with codec tag %u, keyframe (%d) "
@@ -1731,17 +1737,21 @@ gst_flv_demux_parse_tag_video (GstFlvDemux * demux, GstBuffer * buffer)
       7 + codec_data, demux->tag_data_size - codec_data);
 
   /* detect (and deem to be resyncs)  large dts gaps */
-  if (gst_flv_demux_update_resync (demux, dts, demux->video_need_discont,
-          &demux->last_video_dts, &demux->video_time_offset)) {
+  if (gst_flv_demux_update_resync (demux, dts + MIN_PTS / GST_MSECOND, dts < 0
+          || demux->video_need_discont, &demux->last_video_dts,
+          &demux->video_time_offset)) {
     GST_BUFFER_FLAG_SET (outbuf, GST_BUFFER_FLAG_RESYNC);
   }
 
   /* Fill buffer with data */
-  GST_LOG_OBJECT (demux, "dts %u pts %u cts %d", dts, dts + cts, cts);
+  pts = dts + cts;
+  GST_LOG_OBJECT (demux, "dts %" G_GINT64_FORMAT " pts %" G_GINT64_FORMAT
+      " cts %d", dts, pts, cts);
 
   GST_BUFFER_PTS (outbuf) =
-      (dts + cts) * GST_MSECOND + demux->video_time_offset;
-  GST_BUFFER_DTS (outbuf) = dts * GST_MSECOND + demux->video_time_offset;
+      pts * GST_MSECOND + demux->video_time_offset + MIN_PTS;
+  GST_BUFFER_DTS (outbuf) =
+      dts * GST_MSECOND + demux->video_time_offset + MIN_PTS;
   GST_BUFFER_DURATION (outbuf) = GST_CLOCK_TIME_NONE;
   GST_BUFFER_OFFSET (outbuf) = demux->video_offset++;
   GST_BUFFER_OFFSET_END (outbuf) = demux->video_offset;
@@ -2070,7 +2080,7 @@ gst_flv_demux_cleanup (GstFlvDemux * demux)
   demux->index_max_time = 0;
 
   demux->audio_start = demux->video_start = GST_CLOCK_TIME_NONE;
-  demux->last_audio_pts = demux->last_video_dts = 0;
+  demux->last_audio_pts = demux->last_video_dts = MIN_PTS / GST_MSECOND;
   demux->audio_time_offset = demux->video_time_offset = 0;
 
   demux->no_more_pads = FALSE;
