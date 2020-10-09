@@ -3471,6 +3471,19 @@ gst_ts_demux_push_pending_data (GstTSDemux * demux, TSDemuxStream * stream,
     goto beach;
   }
 
+  /* If at this point we still haven't detected a valid PTS, this means we are
+   * earlier than the previously outputted PTS of other streams. We therefore
+   * discard the data instead of confusing elements downstream. */
+  if (stream->first_pts == GST_CLOCK_TIME_NONE
+      && stream->pts == GST_CLOCK_TIME_NONE) {
+    GST_WARNING_OBJECT (stream->pad, "Dropping early out of bound buffer");
+    if (buffer)
+      gst_buffer_unref (buffer);
+    if (buffer_list)
+      gst_buffer_list_unref (buffer_list);
+    goto beach;
+  }
+
   GST_DEBUG_OBJECT (stream->pad, "stream->pts %" GST_TIME_FORMAT,
       GST_TIME_ARGS (stream->pts));
 
