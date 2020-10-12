@@ -2323,7 +2323,7 @@ mpegts_packetizer_pts_to_ts (MpegTSPacketizer2 * packetizer,
          * returning bogus values if it's a PTS/DTS which is *just*
          * before the start of the current group
          */
-        if (PCRTIME_TO_GSTTIME (refpcr) - pts > GST_SECOND) {
+        if (PCRTIME_TO_GSTTIME (refpcr) - pts > 5 * GST_SECOND) {
           pts += PCR_GST_MAX_VALUE;
         } else
           refpcr = G_MAXINT64;
