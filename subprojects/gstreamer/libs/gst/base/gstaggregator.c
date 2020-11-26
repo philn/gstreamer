@@ -79,6 +79,8 @@
  *    these into gap buffers with matching PTS and duration. It will also
  *    flag these buffers with GST_BUFFER_FLAG_GAP and GST_BUFFER_FLAG_DROPPABLE
  *    to ease their identification and subsequent processing.
+ *    In addition, if the gap event was flagged with GST_GAP_FLAG_MISSING_DATA,
+ *    the resulting gap buffer is tagged with GST_BUFFER_FLAG_CORRUPTED.
  *
  *  * Subclasses must use (a subclass of) #GstAggregatorPad for both their
  *    sink and source pads.
@@ -1723,6 +1725,7 @@ gst_aggregator_default_sink_event (GstAggregator * self,
       GstClockTime pts, endpts;
       GstClockTime duration;
       GstBuffer *gapbuf;
+      GstGapFlags flags = 0;
 
       gst_event_parse_gap (event, &pts, &duration);
 
@@ -1751,6 +1754,10 @@ gst_aggregator_default_sink_event (GstAggregator * self,
       GST_BUFFER_DURATION (gapbuf) = duration;
       GST_BUFFER_FLAG_SET (gapbuf, GST_BUFFER_FLAG_GAP);
       GST_BUFFER_FLAG_SET (gapbuf, GST_BUFFER_FLAG_DROPPABLE);
+
+      gst_event_parse_gap_flags (event, &flags);
+      if (flags & GST_GAP_FLAG_MISSING_DATA)
+        GST_BUFFER_FLAG_SET (gapbuf, GST_BUFFER_FLAG_CORRUPTED);
 
       /* Remove GAP event so we can replace it with the buffer */
       PAD_LOCK (aggpad);
