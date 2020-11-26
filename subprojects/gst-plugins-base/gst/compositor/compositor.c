@@ -1249,6 +1249,10 @@ _should_draw_background (GstVideoAggregator * vagg)
     if (gst_aggregator_pad_is_inactive (GST_AGGREGATOR_PAD (l->data)))
       continue;
 
+    if (gst_video_aggregator_pad_get_prepared_frame (GST_VIDEO_AGGREGATOR_PAD
+            (l->data)) == NULL)
+      continue;
+
     if (_pad_obscures_rectangle (vagg, l->data, bg_rect)) {
       draw = FALSE;
       break;
