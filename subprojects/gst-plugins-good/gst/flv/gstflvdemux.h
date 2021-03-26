@@ -157,6 +157,10 @@ struct _GstFlvDemux
   gboolean audio_done;
   gint64 from_offset;
   gint64 to_offset;
+
+  /* for attempting to calculate the correct segment start */
+  GstAdapter *initial_buffers_audio;
+  GstAdapter *initial_buffers_video;
 };
 
 struct _GstFlvDemuxClass
