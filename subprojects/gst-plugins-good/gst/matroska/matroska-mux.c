@@ -967,6 +967,7 @@ check_field (GQuark field_id, const GValue * value, gpointer user_data)
 {
   GstStructure *structure = (GstStructure *) user_data;
   const gchar *name = gst_structure_get_name (structure);
+  const GValue *other = gst_structure_id_get_value (structure, field_id);
 
   if ((g_strcmp0 (name, "video/x-h264") == 0 &&
           !g_strcmp0 (gst_structure_get_string (structure, "stream-format"),
@@ -1010,7 +1011,27 @@ check_field (GQuark field_id, const GValue * value, gpointer user_data)
       return FALSE;
   }
 
-  return TRUE;
+  if (g_str_has_prefix (name, "video/")) {
+    if (field_id == g_quark_from_static_string ("framerate"))
+      return TRUE;
+  }
+
+  if (g_strcmp0 (name, "video/x-vp8") == 0 ||
+      g_strcmp0 (name, "video/x-vp9") == 0) {
+    /* numerous players support changing the vp8/vp9 resolution midstream just
+     * fine without any particular extra support from the container */
+    if (field_id == g_quark_from_static_string ("streamheader"))
+      return TRUE;
+    if (field_id == g_quark_from_static_string ("width"))
+      return TRUE;
+    if (field_id == g_quark_from_static_string ("height"))
+      return TRUE;
+  }
+
+  if (other == NULL)
+    return FALSE;
+
+  return gst_value_compare (value, other) == GST_VALUE_EQUAL;
 }
 
 static gboolean
@@ -1038,6 +1059,49 @@ check_new_caps (GstCaps * old_caps, GstCaps * new_caps)
   return ret;
 }
 
+static gboolean
+gst_matroska_mux_caps_is_subset (GstMatroskaMux * mux, GstCaps * subset,
+    GstCaps * superset)
+{
+  GstStructure *sub_s = gst_caps_get_structure (subset, 0);
+  GstStructure *sup_s = gst_caps_get_structure (superset, 0);
+
+  if (!gst_structure_has_name (sup_s, gst_structure_get_name (sub_s)))
+    return FALSE;
+
+  return gst_structure_foreach (sub_s, check_field, sup_s);
+}
+
+static gboolean
+gst_matroska_mux_can_renegotiate_caps (GstMatroskaMux * mux, GstPad * pad,
+    GstCaps * new_caps)
+{
+  GstCaps *old_caps = gst_pad_get_current_caps (pad);
+
+  if (mux->state < GST_MATROSKA_MUX_STATE_HEADER)
+    return TRUE;
+
+  if (!old_caps) {
+    /* we can't add caps to an already running mux */
+    GST_ELEMENT_ERROR (mux, STREAM, MUX, (NULL),
+        ("Caps on pad %" GST_PTR_FORMAT
+            " arrived late. Headers were already written", pad));
+    return FALSE;
+  }
+
+  if (!gst_matroska_mux_caps_is_subset (mux, new_caps, old_caps)) {
+    GST_ELEMENT_ERROR (mux, STREAM, MUX, (NULL),
+        ("Most caps changes are not supported by Matroska\nCurrent: `%"
+            GST_PTR_FORMAT "`\nNew: `%" GST_PTR_FORMAT "`", old_caps,
+            new_caps));
+    gst_caps_unref (old_caps);
+    return FALSE;
+  }
+
+  gst_caps_unref (old_caps);
+  return TRUE;
+}
+
 /**
  * gst_matroska_mux_video_pad_setcaps:
  * @pad: Pad which got the caps.
@@ -1062,26 +1126,11 @@ gst_matroska_mux_video_pad_setcaps (GstPad * pad, GstCaps * caps)
   gint width, height, pixel_width, pixel_height;
   gint fps_d, fps_n;
   guint multiview_flags;
-  GstCaps *old_caps;
 
   mux = GST_MATROSKA_MUX (GST_PAD_PARENT (pad));
 
-  if ((old_caps = gst_pad_get_current_caps (pad))) {
-    if (mux->state >= GST_MATROSKA_MUX_STATE_HEADER
-        && !check_new_caps (old_caps, caps)) {
-      GST_ELEMENT_ERROR (mux, STREAM, MUX, (NULL),
-          ("Caps changes are not supported by Matroska\nCurrent: `%"
-              GST_PTR_FORMAT "`\nNew: `%" GST_PTR_FORMAT "`", old_caps, caps));
-      gst_caps_unref (old_caps);
-      goto refuse_caps;
-    }
-    gst_caps_unref (old_caps);
-  } else if (mux->state >= GST_MATROSKA_MUX_STATE_HEADER) {
-    GST_ELEMENT_ERROR (mux, STREAM, MUX, (NULL),
-        ("Caps on pad %" GST_PTR_FORMAT
-            " arrived late. Headers were already written", pad));
+  if (!gst_matroska_mux_can_renegotiate_caps (mux, pad, caps))
     goto refuse_caps;
-  }
 
   /* find context */
   collect_pad = (GstMatroskaPad *) gst_pad_get_element_private (pad);
@@ -3394,21 +3443,21 @@ static const struct
 }
 gst_matroska_tag_conv[] = {
   {
-  GST_MATROSKA_TAG_ID_TITLE, GST_TAG_TITLE}, {
-  GST_MATROSKA_TAG_ID_ARTIST, GST_TAG_ARTIST}, {
-  GST_MATROSKA_TAG_ID_ALBUM, GST_TAG_ALBUM}, {
-  GST_MATROSKA_TAG_ID_COMMENTS, GST_TAG_COMMENT}, {
-  GST_MATROSKA_TAG_ID_BITSPS, GST_TAG_BITRATE}, {
-  GST_MATROSKA_TAG_ID_BPS, GST_TAG_BITRATE}, {
-  GST_MATROSKA_TAG_ID_ENCODER, GST_TAG_ENCODER}, {
-  GST_MATROSKA_TAG_ID_DATE, GST_TAG_DATE}, {
-  GST_MATROSKA_TAG_ID_ISRC, GST_TAG_ISRC}, {
-  GST_MATROSKA_TAG_ID_COPYRIGHT, GST_TAG_COPYRIGHT}, {
-  GST_MATROSKA_TAG_ID_BPM, GST_TAG_BEATS_PER_MINUTE}, {
-  GST_MATROSKA_TAG_ID_TERMS_OF_USE, GST_TAG_LICENSE}, {
-  GST_MATROSKA_TAG_ID_COMPOSER, GST_TAG_COMPOSER}, {
-  GST_MATROSKA_TAG_ID_LEAD_PERFORMER, GST_TAG_PERFORMER}, {
-  GST_MATROSKA_TAG_ID_GENRE, GST_TAG_GENRE}
+      GST_MATROSKA_TAG_ID_TITLE, GST_TAG_TITLE}, {
+      GST_MATROSKA_TAG_ID_ARTIST, GST_TAG_ARTIST}, {
+      GST_MATROSKA_TAG_ID_ALBUM, GST_TAG_ALBUM}, {
+      GST_MATROSKA_TAG_ID_COMMENTS, GST_TAG_COMMENT}, {
+      GST_MATROSKA_TAG_ID_BITSPS, GST_TAG_BITRATE}, {
+      GST_MATROSKA_TAG_ID_BPS, GST_TAG_BITRATE}, {
+      GST_MATROSKA_TAG_ID_ENCODER, GST_TAG_ENCODER}, {
+      GST_MATROSKA_TAG_ID_DATE, GST_TAG_DATE}, {
+      GST_MATROSKA_TAG_ID_ISRC, GST_TAG_ISRC}, {
+      GST_MATROSKA_TAG_ID_COPYRIGHT, GST_TAG_COPYRIGHT}, {
+      GST_MATROSKA_TAG_ID_BPM, GST_TAG_BEATS_PER_MINUTE}, {
+      GST_MATROSKA_TAG_ID_TERMS_OF_USE, GST_TAG_LICENSE}, {
+      GST_MATROSKA_TAG_ID_COMPOSER, GST_TAG_COMPOSER}, {
+      GST_MATROSKA_TAG_ID_LEAD_PERFORMER, GST_TAG_PERFORMER}, {
+      GST_MATROSKA_TAG_ID_GENRE, GST_TAG_GENRE}
 };
 
 /* Every stagefright implementation on android up to and including 6.0.1 is using
