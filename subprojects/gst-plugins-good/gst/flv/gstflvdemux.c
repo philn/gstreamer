@@ -1445,18 +1445,22 @@ gst_flv_demux_parse_tag_audio (GstFlvDemux * demux, GstBuffer * buffer)
     if (gst_adapter_available (demux->initial_buffers_video) > 0
         || audio_stored > MAX_INITIAL_STORED_TIME) {
       GstClockTime start = GST_CLOCK_TIME_NONE;
-      if (!GST_CLOCK_TIME_IS_VALID (demux->video_start)
-          || !GST_CLOCK_TIME_IS_VALID (demux->audio_start)) {
-        GST_WARNING_OBJECT (demux,
-            "Cannot calculate segment start with a none value");
-        // do something better?
-        ret = GST_FLOW_ERROR;
-        goto beach;
-      }
 
-      start =
-          demux->video_start <
-          demux->audio_start ? demux->video_start : demux->audio_start;
+      if (!GST_CLOCK_TIME_IS_VALID (demux->video_start)) {
+        if (!GST_CLOCK_TIME_IS_VALID (demux->audio_start)) {
+          GST_WARNING_OBJECT (demux,
+              "Cannot calculate segment start with a none value");
+          // do something better?
+          ret = GST_FLOW_ERROR;
+          goto beach;
+        }
+        start = demux->audio_start;
+      } else if (!GST_CLOCK_TIME_IS_VALID (demux->audio_start)
+          || demux->video_start < demux->audio_start) {
+        start = demux->video_start;
+      } else {
+        start = demux->audio_start;
+      }
 
       if (!demux->new_seg_event) {
         GST_DEBUG_OBJECT (demux, "pushing newsegment from %"
@@ -1940,18 +1944,22 @@ gst_flv_demux_parse_tag_video (GstFlvDemux * demux, GstBuffer * buffer)
     if (gst_adapter_available (demux->initial_buffers_audio) > 0
         || video_stored > MAX_INITIAL_STORED_TIME) {
       GstClockTime start = GST_CLOCK_TIME_NONE;
-      if (!GST_CLOCK_TIME_IS_VALID (demux->video_start)
-          || !GST_CLOCK_TIME_IS_VALID (demux->audio_start)) {
-        GST_WARNING_OBJECT (demux,
-            "Cannot calculate segment start with a none value");
-        // do something better?
-        ret = GST_FLOW_ERROR;
-        goto beach;
-      }
 
-      start =
-          demux->video_start <
-          demux->audio_start ? demux->video_start : demux->audio_start;
+      if (!GST_CLOCK_TIME_IS_VALID (demux->audio_start)) {
+        if (!GST_CLOCK_TIME_IS_VALID (demux->video_start)) {
+          GST_WARNING_OBJECT (demux,
+              "Cannot calculate segment start with a none value");
+          // do something better?
+          ret = GST_FLOW_ERROR;
+          goto beach;
+        }
+        start = demux->video_start;
+      } else if (!GST_CLOCK_TIME_IS_VALID (demux->video_start)
+          || demux->audio_start < demux->video_start) {
+        start = demux->audio_start;
+      } else {
+        start = demux->video_start;
+      }
 
       if (!demux->new_seg_event) {
         GST_DEBUG_OBJECT (demux, "pushing newsegment from %"
