@@ -126,6 +126,7 @@ struct _GstWpeVideoSrc
   gboolean gl_enabled;
 
   gint64 n_frames;              /* total frames sent */
+  GstClockTime start_ts;
 
   WPEView *view;
 
@@ -173,8 +174,11 @@ gst_wpe_video_src_create (GstBaseSrc * bsrc, guint64 offset, guint length,
   GstBuffer *locked_buffer;
   GstClockTime next_time;
   gint64 ts_offset = 0;
+  gint64 n_frames;
 
   WPE_LOCK (src);
+  n_frames = src->n_frames;
+  src->n_frames++;
   if (src->gl_enabled) {
     WPE_UNLOCK (src);
     return GST_CALL_PARENT_WITH_DEFAULT (GST_BASE_SRC_CLASS, create, (bsrc,
@@ -194,8 +198,7 @@ gst_wpe_video_src_create (GstBaseSrc * bsrc, guint64 offset, guint length,
 
   /* The following code mimics the behaviour of GLBaseSrc::fill */
   GST_BUFFER_TIMESTAMP (*buf) = ts_offset + gl_src->running_time;
-  GST_BUFFER_OFFSET (*buf) = src->n_frames;
-  src->n_frames++;
+  GST_BUFFER_OFFSET (*buf) = n_frames;
   GST_BUFFER_OFFSET_END (*buf) = src->n_frames;
   if (gl_src->out_info.fps_n) {
     next_time = gst_util_uint64_scale_int (src->n_frames * GST_SECOND,
@@ -232,6 +235,8 @@ gst_wpe_video_src_fill_memory (GstGLBaseSrc * bsrc, GstGLMemory * memory)
   const GstGLFuncs *gl;
   guint tex_id;
   GstEGLImage *locked_image;
+  GstClockTime ts = gst_util_get_timestamp();
+  gdouble time_elapsed, average_fps;
 
   if (!gst_gl_context_check_feature (GST_GL_CONTEXT (bsrc->context),
           "EGL_KHR_image_base")) {
@@ -240,6 +245,13 @@ gst_wpe_video_src_fill_memory (GstGLBaseSrc * bsrc, GstGLMemory * memory)
   }
 
   WPE_LOCK (src);
+
+  if (!GST_CLOCK_TIME_IS_VALID(src->start_ts))
+    src->start_ts = ts;
+
+  time_elapsed = (gdouble)(ts - src->start_ts) / GST_SECOND;
+  average_fps = (gdouble)src->n_frames / time_elapsed;
+  GST_TRACE_OBJECT(src, "FPS: %f", average_fps);
 
   gl = bsrc->context->gl_vtable;
   tex_id = gst_gl_memory_get_texture_id (memory);
@@ -313,6 +325,7 @@ gst_wpe_video_src_start (GstWpeVideoSrc * src)
 
   if (created_view) {
     src->n_frames = 0;
+    src->start_ts = GST_CLOCK_TIME_NONE;
   }
   WPE_UNLOCK (src);
   return TRUE;
