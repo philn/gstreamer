@@ -422,8 +422,7 @@ gst_gl_base_src_fill (GstPushSrc * psrc, GstBuffer * buffer)
   g_rec_mutex_unlock (&src->priv->context_lock);
 
   GST_BUFFER_TIMESTAMP (buffer) =
-      src->priv->timestamp_offset +
-      gst_element_get_current_running_time (GST_ELEMENT_CAST (src));
+      src->priv->timestamp_offset + src->running_time;
   GST_BUFFER_OFFSET (buffer) = src->priv->n_frames;
   src->priv->n_frames++;
   GST_BUFFER_OFFSET_END (buffer) = src->priv->n_frames;
