@@ -225,13 +225,19 @@ gst_wpe_src_new_audio_stream (GstWpeSrc *src, guint32 id, GstCaps *caps, const g
   GstSegment segment;
 
   name = g_strdup_printf ("audio_%u", id);
-  audio_pad = gst_wpe_audio_pad_new (name);
-  pad = GST_PAD_CAST (audio_pad);
-  g_free (name);
+  pad = gst_element_get_static_pad (GST_ELEMENT (src), name);
+  if (!pad) {
+    audio_pad = gst_wpe_audio_pad_new (name);
+    pad = GST_PAD_CAST (audio_pad);
+    g_free (name);
 
-  gst_pad_set_active (pad, TRUE);
-  gst_element_add_pad (GST_ELEMENT_CAST (src), pad);
-  gst_flow_combiner_add_pad (src->flow_combiner, pad);
+    GST_ERROR_OBJECT(pad, "ADD PAD");
+    gst_pad_set_active (pad, TRUE);
+    gst_element_add_pad (GST_ELEMENT_CAST (src), pad);
+    gst_flow_combiner_add_pad (src->flow_combiner, pad);
+  } else {
+    audio_pad = (GstWpeAudioPad*) pad;
+  }
 
   GST_DEBUG_OBJECT (src, "Adding pad: %" GST_PTR_FORMAT, pad);
 
@@ -299,7 +305,7 @@ gst_wpe_src_push_audio_buffer (GstWpeSrc* src, guint32 id, guint64 size)
 static void
 gst_wpe_src_remove_audio_pad (GstWpeSrc *src, GstPad *pad)
 {
-  GST_DEBUG_OBJECT (src, "Removing pad: %" GST_PTR_FORMAT, pad);
+  GST_ERROR_OBJECT (src, "Removing pad: %" GST_PTR_FORMAT, pad);
   gst_element_remove_pad (GST_ELEMENT_CAST (src), pad);
   gst_flow_combiner_remove_pad (src->flow_combiner, pad);
 }
@@ -446,12 +452,18 @@ gst_wpe_src_init (GstWpeSrc * src)
   gst_object_unref (pad);
 }
 
-static gboolean
-gst_wpe_audio_remove_audio_pad  (gint32  *id, GstPad *pad, GstWpeSrc  *self)
+static void
+gst_wpe_audio_stop_pad  (gint32  *id, GstPad *pad, GstWpeSrc  *self)
 {
-  gst_wpe_src_remove_audio_pad (self, pad);
+  GstWpeAudioPad *audio_pad = GST_WPE_AUDIO_PAD (pad);
 
-  return TRUE;
+  g_assert (audio_pad);
+
+  audio_pad->discont_pending = TRUE;
+  if (audio_pad->fd > 0) {
+    close(audio_pad->fd);
+    audio_pad->fd = 0;
+  }
 }
 
 static GstStateChangeReturn
@@ -464,8 +476,8 @@ gst_wpe_src_change_state (GstElement * element, GstStateChange transition)
   result = GST_CALL_PARENT_WITH_DEFAULT (GST_ELEMENT_CLASS , change_state, (element, transition), GST_STATE_CHANGE_FAILURE);
 
   switch (transition) {
-  case GST_STATE_CHANGE_PAUSED_TO_READY:{
-    g_hash_table_foreach_remove (src->audio_src_pads, (GHRFunc) gst_wpe_audio_remove_audio_pad, src);
+  case GST_STATE_CHANGE_READY_TO_NULL:{
+    g_hash_table_foreach (src->audio_src_pads, (GHFunc) gst_wpe_audio_stop_pad, src);
     gst_flow_combiner_reset (src->flow_combiner);
     break;
   }

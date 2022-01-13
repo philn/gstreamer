@@ -23,6 +23,7 @@
 #include <glib.h>
 #include <gst/gl/gstglfuncs.h>
 #include <gst/gl/egl/gstgldisplay_egl.h>
+#include <gst/base/gstdataqueue.h>
 #include <wpe/fdo.h>
 #include <wpe/fdo-egl.h>
 #include <wpe/webkit.h>
@@ -56,6 +57,8 @@ public:
     bool hasUri() const { return webkit.uri; }
     void disconnectLoadFailedSignal();
     void waitLoadCompletion();
+
+    GstDataQueue *queue;
 
 protected:
     void handleExportedImage(gpointer);
@@ -102,17 +105,6 @@ private:
 
     // This mutex guards access to either egl or shm resources declared below,
     // depending on the runtime behavior.
-    GMutex images_mutex;
-
-    struct {
-        GstEGLImage* pending;
-        GstEGLImage* committed;
-    } egl { nullptr, nullptr };
-
-    struct {
-        GstBuffer* pending;
-        GstBuffer* committed;
-    } shm { nullptr, nullptr };
 
     struct {
         gulong init_ext_sigid;

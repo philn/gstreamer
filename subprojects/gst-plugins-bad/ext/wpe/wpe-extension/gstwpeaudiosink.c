@@ -139,11 +139,9 @@ render (GstBaseSink * sink, GstBuffer * buf)
   msg = webkit_user_message_new ("gstwpe.new_buffer",
       g_variant_new ("(ut)", self->id, info.size));
 
-  g_mutex_lock (&self->buf_lock);
-  gst_wpe_extension_send_message (msg, self->cancellable,
-      (GAsyncReadyCallback) message_consumed_cb, self);
-  g_cond_wait (&self->buf_cond, &self->buf_lock);
-  g_mutex_unlock (&self->buf_lock);
+  if (!g_cancellable_is_cancelled (self->cancellable)) {
+    gst_wpe_extension_send_message (msg, self->cancellable, NULL, NULL);
+  }
 
   gst_buffer_unmap (buf, &info);
 

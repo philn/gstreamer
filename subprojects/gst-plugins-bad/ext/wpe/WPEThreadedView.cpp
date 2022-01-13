@@ -38,6 +38,33 @@
 GST_DEBUG_CATEGORY_EXTERN (wpe_view_debug);
 #define GST_CAT_DEFAULT wpe_view_debug
 
+static void
+data_queue_item_free (GstDataQueueItem * item)
+{
+  GST_TRACE ("release  %p", item->object);
+
+  gst_clear_mini_object (&item->object);
+  g_slice_free (GstDataQueueItem, item);
+}
+
+static gboolean
+data_queue_check_full (GstDataQueue * queue, guint visible,
+    guint bytes, guint64 time, gpointer checkdata)
+{
+  return FALSE;
+}
+
+static GstMiniObject *
+data_queue_item_steal_object (GstDataQueueItem * item)
+{
+  GstMiniObject *res;
+
+  res = item->object;
+  item->object = NULL;
+
+  return res;
+}
+
 class GMutexHolder {
 public:
     GMutexHolder(GMutex& mutex)
@@ -73,6 +100,7 @@ WPEContextThread::WPEContextThread()
 {
     g_mutex_init(&threading.mutex);
     g_cond_init(&threading.cond);
+
 
     {
         GMutexHolder lock(threading.mutex);
@@ -351,8 +379,10 @@ WPEView* WPEContextThread::createWPEView(GstWpeVideoSrc* src, GstGLContext* cont
     });
 
     if (view && view->hasUri()) {
+        GstDataQueueItem *item;
         GST_DEBUG("waiting load to finish");
-        view->waitLoadCompletion();
+        gst_data_queue_peek (view->queue, &item);
+        // view->waitLoadCompletion();
         GST_DEBUG("done");
     }
 
@@ -415,11 +445,13 @@ WPEView::WPEView(WebKitWebContext* web_context, GstWpeVideoSrc* src, GstGLContex
 }
 #endif // G_OS_UNIX
 
+
+    queue = gst_data_queue_new (data_queue_check_full, NULL, NULL, NULL);
     g_mutex_init(&threading.ready_mutex);
     g_cond_init(&threading.ready_cond);
     threading.ready = FALSE;
 
-    g_mutex_init(&images_mutex);
+    // g_mutex_init(&images_mutex);
     if (context)
         gst.context = GST_GL_CONTEXT(gst_object_ref(context));
     if (display) {
@@ -495,37 +527,38 @@ WPEView::~WPEView()
     g_mutex_clear(&threading.ready_mutex);
     g_cond_clear(&threading.ready_cond);
 
-    {
-        GMutexHolder lock(images_mutex);
+    gst_clear_object (&queue);
+    // {
+    //     GMutexHolder lock(images_mutex);
 
-        if (egl.pending) {
-            egl_pending = egl.pending;
-            egl.pending = nullptr;
-        }
-        if (egl.committed) {
-            egl_committed = egl.committed;
-            egl.committed = nullptr;
-        }
-        if (shm.pending) {
-            GST_TRACE ("%p freeing shm pending %" GST_PTR_FORMAT, this, shm.pending);
-            shm_pending = shm.pending;
-            shm.pending = nullptr;
-        }
-        if (shm.committed) {
-            GST_TRACE ("%p freeing shm commited %" GST_PTR_FORMAT, this, shm.committed);
-            shm_committed = shm.committed;
-            shm.committed = nullptr;
-        }
-    }
+    //     if (egl.pending) {
+    //         egl_pending = egl.pending;
+    //         egl.pending = nullptr;
+    //     }
+    //     if (egl.committed) {
+    //         egl_committed = egl.committed;
+    //         egl.committed = nullptr;
+    //     }
+    //     if (shm.pending) {
+    //         GST_TRACE ("%p freeing shm pending %" GST_PTR_FORMAT, this, shm.pending);
+    //         shm_pending = shm.pending;
+    //         shm.pending = nullptr;
+    //     }
+    //     if (shm.committed) {
+    //         GST_TRACE ("%p freeing shm commited %" GST_PTR_FORMAT, this, shm.committed);
+    //         shm_committed = shm.committed;
+    //         shm.committed = nullptr;
+    //     }
+    // }
 
-    if (egl_pending)
-        gst_egl_image_unref (egl_pending);
-    if (egl_committed)
-        gst_egl_image_unref (egl_committed);
-    if (shm_pending)
-        gst_buffer_unref (shm_pending);
-    if (shm_committed)
-        gst_buffer_unref (shm_committed);
+    // if (egl_pending)
+    //     gst_egl_image_unref (egl_pending);
+    // if (egl_committed)
+    //     gst_egl_image_unref (egl_committed);
+    // if (shm_pending)
+    //     gst_buffer_unref (shm_pending);
+    // if (shm_committed)
+    //     gst_buffer_unref (shm_committed);
 
     if (audio.init_ext_sigid) {
         WebKitWebContext* web_context = webkit_web_view_get_context (webkit.view);
@@ -562,7 +595,7 @@ WPEView::~WPEView()
         webkit.uri = nullptr;
     }
 
-    g_mutex_clear(&images_mutex);
+    // g_mutex_clear(&images_mutex);
     GST_TRACE ("%p destroyed", this);
 }
 
@@ -584,72 +617,37 @@ void WPEView::waitLoadCompletion()
 
 GstEGLImage* WPEView::image()
 {
-    GstEGLImage* ret = nullptr;
-    bool dispatchFrameComplete = false;
-    GstEGLImage *prev_image = NULL;
+    GstDataQueueItem *item = NULL;
 
-    {
-        GMutexHolder lock(images_mutex);
-
-        GST_TRACE("pending %" GST_PTR_FORMAT " (%d) committed %" GST_PTR_FORMAT " (%d)", egl.pending,
-                  GST_IS_EGL_IMAGE(egl.pending) ? GST_MINI_OBJECT_REFCOUNT_VALUE(GST_MINI_OBJECT_CAST(egl.pending)) : 0,
-                  egl.committed,
-                  GST_IS_EGL_IMAGE(egl.committed) ? GST_MINI_OBJECT_REFCOUNT_VALUE(GST_MINI_OBJECT_CAST(egl.committed)) : 0);
-
-        if (egl.pending) {
-            prev_image = egl.committed;
-            egl.committed = egl.pending;
-            egl.pending = nullptr;
-
-            dispatchFrameComplete = true;
-        }
-
-        if (egl.committed)
-            ret = egl.committed;
+    if (!gst_data_queue_pop(queue, &item)) {
+        GST_INFO ("Internal queue flusing");
+        return NULL;
     }
 
-    if (prev_image)
-        gst_egl_image_unref(prev_image);
+    GstMiniObject * object = data_queue_item_steal_object (item);
+    data_queue_item_free (item);
 
-    if (dispatchFrameComplete)
-        frameComplete();
+    frameComplete();
 
-    return ret;
+    return GST_EGL_IMAGE (object);
 }
 
 GstBuffer* WPEView::buffer()
 {
-    GstBuffer* ret = nullptr;
-    bool dispatchFrameComplete = false;
-    GstBuffer *prev_image = NULL;
+    GstDataQueueItem *item = NULL;
 
-    {
-        GMutexHolder lock(images_mutex);
-
-        GST_TRACE("pending %" GST_PTR_FORMAT " (%d) committed %" GST_PTR_FORMAT " (%d)", shm.pending,
-                  GST_IS_BUFFER(shm.pending) ? GST_MINI_OBJECT_REFCOUNT_VALUE(GST_MINI_OBJECT_CAST(shm.pending)) : 0,
-                  shm.committed,
-                  GST_IS_BUFFER(shm.committed) ? GST_MINI_OBJECT_REFCOUNT_VALUE(GST_MINI_OBJECT_CAST(shm.committed)) : 0);
-
-        if (shm.pending) {
-            prev_image = shm.committed;
-            shm.committed = shm.pending;
-            shm.pending = nullptr;
-
-            dispatchFrameComplete = true;
-        }
-
-        if (shm.committed)
-            ret = shm.committed;
+    GST_ERROR("POOP!");
+    if (!gst_data_queue_pop(queue, &item)) {
+        GST_INFO ("Internal queue flusing");
+        return NULL;
     }
 
-    if (prev_image)
-        gst_buffer_unref(prev_image);
+    GstMiniObject * object = data_queue_item_steal_object (item);
+    data_queue_item_free (item);
 
-    if (dispatchFrameComplete)
-        frameComplete();
+    frameComplete();
 
-    return ret;
+    return GST_BUFFER (object);
 }
 
 void WPEView::resize(int width, int height)
@@ -668,7 +666,7 @@ void WPEView::frameComplete()
 {
     GST_TRACE("frame complete");
     s_view->dispatch([&]() {
-        GST_TRACE("dispatching");
+        GST_ERROR("Frame complete!");
         wpe_view_backend_exportable_fdo_dispatch_frame_complete(wpe.exportable);
     });
 }
@@ -722,21 +720,32 @@ struct ImageContext {
 
 void WPEView::handleExportedImage(gpointer image)
 {
+    GstDataQueueItem *item;
     ImageContext* imageContext = g_slice_new(ImageContext);
     imageContext->view = this;
     imageContext->image = static_cast<gpointer>(image);
     EGLImageKHR eglImage = wpe_fdo_egl_exported_image_get_egl_image(static_cast<struct wpe_fdo_egl_exported_image*>(image));
 
-    auto* gstImage = gst_egl_image_new_wrapped(gst.context, eglImage, GST_GL_RGBA, imageContext, s_releaseImage);
-    {
+    item = g_slice_new (GstDataQueueItem);
+    item->object = GST_MINI_OBJECT (gst_egl_image_new_wrapped(gst.context, eglImage, GST_GL_RGBA, imageContext, s_releaseImage));
+    item->size = wpe.width * wpe.height * 4;
+    item->duration = 0; // FIXME - compute duration - GST_BUFFER_DURATION (item->object);
+    item->visible = TRUE;
+    item->destroy = (GDestroyNotify) data_queue_item_free;
+
+
+    GST_ERROR("PUUSH! :-)");
+    gst_data_queue_push (queue, item);
+    // notifyLoadFinished();
+
+    /* {
       GMutexHolder lock(images_mutex);
 
       GST_TRACE("EGLImage %p wrapped in GstEGLImage %" GST_PTR_FORMAT, eglImage, gstImage);
       gst_clear_mini_object ((GstMiniObject **) &egl.pending);
       egl.pending = gstImage;
 
-      notifyLoadFinished();
-    }
+    } */
 }
 
 struct SHMBufferContext {
@@ -763,6 +772,7 @@ void WPEView::s_releaseSHMBuffer(gpointer data)
 
 void WPEView::handleExportedBuffer(struct wpe_fdo_shm_exported_buffer* buffer)
 {
+  GstDataQueueItem *item = NULL;
     struct wl_shm_buffer* shmBuffer = wpe_fdo_shm_exported_buffer_get_shm_buffer(buffer);
     auto format = wl_shm_buffer_get_format(shmBuffer);
     if (format != WL_SHM_FORMAT_ARGB8888 && format != WL_SHM_FORMAT_XRGB8888) {
@@ -787,6 +797,17 @@ void WPEView::handleExportedBuffer(struct wpe_fdo_shm_exported_buffer* buffer)
     strides[0] = stride;
     gst_buffer_add_video_meta_full(gstBuffer, GST_VIDEO_FRAME_FLAG_NONE, GST_VIDEO_FORMAT_BGRA, width, height, 1, offsets, strides);
 
+
+    item = g_slice_new (GstDataQueueItem);
+    item->object = GST_MINI_OBJECT (gstBuffer);
+    item->size = gst_buffer_get_size (gstBuffer);
+    item->duration = 0; // FIXME! GST_BUFFER_DURATION (gstBuffer);
+    item->visible = TRUE;
+    item->destroy = (GDestroyNotify) data_queue_item_free;
+
+    GST_ERROR("PUUSH! :-)");
+    gst_data_queue_push (queue, item);
+/*
     {
         GMutexHolder lock(images_mutex);
         GST_TRACE("SHM buffer %p wrapped in buffer %" GST_PTR_FORMAT, buffer, gstBuffer);
@@ -794,6 +815,7 @@ void WPEView::handleExportedBuffer(struct wpe_fdo_shm_exported_buffer* buffer)
         shm.pending = gstBuffer;
         notifyLoadFinished();
     }
+*/
 }
 
 struct wpe_view_backend_exportable_fdo_egl_client WPEView::s_exportableEGLClient = {

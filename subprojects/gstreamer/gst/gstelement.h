@@ -799,6 +799,7 @@ struct _GstElement
  * @metadata: metadata for elements of this class
  * @elementfactory: the #GstElementFactory that creates these elements
  * @padtemplates: a #GList of #GstPadTemplate
+
  * @numpadtemplates: the number of padtemplates
  * @pad_templ_cookie: changed whenever the padtemplates change
  * @request_new_pad: called when a new pad is requested
