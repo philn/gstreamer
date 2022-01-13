@@ -624,10 +624,17 @@ GstEGLImage* WPEView::image()
         return NULL;
     }
 
+    if (prev_image) {
+      gst_egl_image_unref(prev_image);
+      // gst_egl_image_unref(prev_image);
+    }
+
     GstMiniObject * object = data_queue_item_steal_object (item);
     data_queue_item_free (item);
-
     frameComplete();
+
+    // prev_image = gst_egl_image_ref(GST_EGL_IMAGE(object));
+    prev_image = GST_EGL_IMAGE(object);
 
     return GST_EGL_IMAGE (object);
 }
@@ -636,7 +643,6 @@ GstBuffer* WPEView::buffer()
 {
     GstDataQueueItem *item = NULL;
 
-    GST_ERROR("POOP!");
     if (!gst_data_queue_pop(queue, &item)) {
         GST_INFO ("Internal queue flusing");
         return NULL;
@@ -666,7 +672,7 @@ void WPEView::frameComplete()
 {
     GST_TRACE("frame complete");
     s_view->dispatch([&]() {
-        GST_ERROR("Frame complete!");
+        GST_TRACE("Frame complete!");
         wpe_view_backend_exportable_fdo_dispatch_frame_complete(wpe.exportable);
     });
 }
@@ -734,9 +740,8 @@ void WPEView::handleExportedImage(gpointer image)
     item->destroy = (GDestroyNotify) data_queue_item_free;
 
 
-    GST_ERROR("PUUSH! :-)");
     gst_data_queue_push (queue, item);
-    // notifyLoadFinished();
+    notifyLoadFinished();
 
     /* {
       GMutexHolder lock(images_mutex);
@@ -805,17 +810,16 @@ void WPEView::handleExportedBuffer(struct wpe_fdo_shm_exported_buffer* buffer)
     item->visible = TRUE;
     item->destroy = (GDestroyNotify) data_queue_item_free;
 
-    GST_ERROR("PUUSH! :-)");
     gst_data_queue_push (queue, item);
-/*
-    {
-        GMutexHolder lock(images_mutex);
-        GST_TRACE("SHM buffer %p wrapped in buffer %" GST_PTR_FORMAT, buffer, gstBuffer);
-        gst_clear_buffer (&shm.pending);
-        shm.pending = gstBuffer;
-        notifyLoadFinished();
-    }
-*/
+    notifyLoadFinished();
+    /*
+        {
+            GMutexHolder lock(images_mutex);
+            GST_TRACE("SHM buffer %p wrapped in buffer %" GST_PTR_FORMAT,
+       buffer, gstBuffer); gst_clear_buffer (&shm.pending); shm.pending =
+       gstBuffer; notifyLoadFinished();
+        }
+    */
 }
 
 struct wpe_view_backend_exportable_fdo_egl_client WPEView::s_exportableEGLClient = {

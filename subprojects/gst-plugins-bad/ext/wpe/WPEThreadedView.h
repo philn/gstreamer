@@ -97,6 +97,8 @@ private:
 
     bool m_isValid { false };
 
+  GstEGLImage *prev_image { nullptr };
+
     struct {
         GMutex ready_mutex;
         GCond ready_cond;
