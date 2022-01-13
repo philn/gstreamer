@@ -264,8 +264,8 @@ gst_wpe_video_src_fill_memory (GstGLBaseSrc * bsrc, GstGLMemory * memory)
 
   // The EGLImage is implicitely associated with the memory we're filling, so we
   // need to ensure their life cycles are tied.
-  gst_mini_object_set_qdata (GST_MINI_OBJECT_CAST (memory), _egl_image_quark (),
-      gst_egl_image_ref (locked_image), (GDestroyNotify) gst_egl_image_unref);
+  // gst_mini_object_set_qdata (GST_MINI_OBJECT_CAST (memory), _egl_image_quark (),
+  //     gst_egl_image_ref (locked_image), (GDestroyNotify) gst_egl_image_unref);
 
   gl->ActiveTexture (GL_TEXTURE0 + memory->plane);
   gl->BindTexture (GL_TEXTURE_2D, tex_id);

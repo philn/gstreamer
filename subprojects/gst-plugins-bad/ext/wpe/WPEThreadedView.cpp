@@ -626,15 +626,15 @@ GstEGLImage* WPEView::image()
 
     if (prev_image) {
       gst_egl_image_unref(prev_image);
-      // gst_egl_image_unref(prev_image);
+      gst_egl_image_unref(prev_image);
     }
 
     GstMiniObject * object = data_queue_item_steal_object (item);
     data_queue_item_free (item);
     frameComplete();
 
-    // prev_image = gst_egl_image_ref(GST_EGL_IMAGE(object));
-    prev_image = GST_EGL_IMAGE(object);
+    prev_image = gst_egl_image_ref(GST_EGL_IMAGE(object));
+    //prev_image = GST_EGL_IMAGE(object);
 
     return GST_EGL_IMAGE (object);
 }
